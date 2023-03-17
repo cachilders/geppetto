@@ -37,7 +37,7 @@ return {
     [48] = "Hold Sampler",
     [93] = "TAP Tempo",
     [102] = "Bypass"
-  },  proram = {
+  },  program = {
     [1] = "Arp A",
     [2] = "Arp B",
     [3] = "Arp C",

@@ -1,4 +1,4 @@
-{
+return {
   make = "Meris",
   model = "Hedra",
   control = {
