@@ -1,4 +1,4 @@
-Inputs = {
+inputs = {
   Select = {
     x = 0,
     y = 0,
@@ -12,27 +12,27 @@ Inputs = {
   }
 }
 
-function Inputs.Select:new(instance)
-  local instance = instance or {},
+function inputs.Select:new(options)
+  local instance = options or {}
   setmetatable(instance, self)
   self.__index = self
   return instance
 end
 
-function Inputs.Select:set(field, v)
-  self[field] = v
+function inputs.Select:set(k, v)
+  self[k] = v
 end
 
-function Inputs.Select:get(field)
-  return self[field]
+function inputs.Select:get(k)
+  return self[k]
 end
 
-function Inputs.Select:set_index_delta(d)
+function inputs.Select:set_index_delta(d)
   self.selected = util.clamp(self.selected + d, 1, #self.options)
   self.action(self.selected)
 end
 
-function Inputs.Select:redraw()
+function inputs.Select:redraw()
   local value = self.options[self.selected] or '<SELECT>'
   screen.font_face(self.font_face)
   screen.move(self.x, self.y)
@@ -53,4 +53,4 @@ function Inputs.Select:redraw()
   screen.text(value)
 end
 
-return Inputs
+return inputs

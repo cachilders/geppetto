@@ -12,37 +12,35 @@ Graph = require('graph')
 LFO = require('lfo')
 
 include('lib/inputs')
+include('lib/device')
 
 CC_LABEL = 'CC -> '
 PROGRAM_LABEL = 'Program -> '
 
 function init()
   init_midi()
-  init_devices()
-  init_lfo()
+  init_device_configurations()
+  init_lfo_controls()
+  init_inputs()
+  init_state()
 
   screen.font_face(1)
-  
+
+  redraw()
+end
+
+function init_state()
+  -- Streamline and make persistent (optionally)
+
+  active_device = nil
   play_status = UI.PlaybackIcon.new(122, 0, 5, 4)
-
-  midi_list = Inputs.Select:new({ x = 0, y = 14, selected = 1, options = {1,2,3,4}})
-  channel_list = Inputs.Select:new({ x = 20, y = 14, selected = 1, options = m.channels})
-  device_list = Inputs.Select:new({ x = 40, y = 14, options = device_names, action = update_device_control_options})
-  min_list = Inputs.Select:new({ x = 0, y = 37, selected = 1, options = midi_range, action = function(v) mod_lfo:set('min', v) end})
-  max_list = Inputs.Select:new({ x = 20, y = 37, selected = 128, options = midi_range, action = function(v) mod_lfo:set('max', v) end})
-  depth_list = Inputs.Select:new({ x = 40, y = 37, selected = 100, options = depth_range, action = function(v) mod_lfo:set('depth', calculate_depth(v)) end})
-  shape_list = Inputs.Select:new({ x = 60, y = 37, selected = 1, options = shape_options, action = function(v) mod_lfo:set('shape', shape_options[v]) end})
-  baseline_list = Inputs.Select:new({ x = 95, y = 37, selected = 1, options = baseline_options, action = function(v) mod_lfo:set('baseline', baseline_options[v]) end})
-  control_list = Inputs.Select:new({ x = screen.text_extents(CC_LABEL) + 6, y = 47})
-  program_list = Inputs.Select:new({ x = screen.text_extents(PROGRAM_LABEL) + 6, y = 61})
-
   app = {
     ui = {
       playing = false,
       view = 1,
       views = {
         [1] = {
-          active_field = 1,
+          active_field = 3,
           fields = {
             -- midi
             [1] = midi_list,
@@ -62,8 +60,20 @@ function init()
       }
     }
   }
+end
 
-  redraw()
+function init_inputs()
+    -- These inputs were originally the scrolling select and will need more positioning flexibility on subsequent refactor
+    midi_list = inputs.Select:new({ x = 0, y = 14, selected = 1, options = {1,2,3,4}, action = function(v) safe_set_device_prop('midi_port', v) end})
+    channel_list = inputs.Select:new({ x = 20, y = 14, selected = 1, options = m.channels,  action = function(v) safe_set_device_prop('midi_channel', v) end})
+    device_list = inputs.Select:new({ x = 40, y = 14, options = device_names, action = update_device})
+    min_list = inputs.Select:new({ x = 0, y = 37, selected = 1, options = midi_range, action = function(v) safe_set_device_lfo_prop('min', v) end})
+    max_list = inputs.Select:new({ x = 20, y = 37, selected = 128, options = midi_range, action = function(v) safe_set_device_lfo_prop('max', v) end})
+    depth_list = inputs.Select:new({ x = 40, y = 37, selected = 100, options = depth_range, action = function(v) safe_set_device_lfo_prop('depth', calculate_depth(v)) end})
+    shape_list = inputs.Select:new({ x = 60, y = 37, selected = 1, options = shape_options, action = function(v) safe_set_device_lfo_prop('shape', shape_options[v]) end})
+    baseline_list = inputs.Select:new({ x = 95, y = 37, selected = 1, options = baseline_options, action = function(v) safe_set_device_lfo_prop('baseline', baseline_options[v]) end})
+    control_list = inputs.Select:new({ x = screen.text_extents(CC_LABEL) + 6, y = 47, action = function(v) safe_set_device_prop('modulated_control', v) end})
+    program_list = inputs.Select:new({ x = screen.text_extents(PROGRAM_LABEL) + 6, y = 61, action = function(v) safe_set_device_prop('selected_program', v) end})
 end
 
 function init_midi()
@@ -72,11 +82,15 @@ function init_midi()
 
   m = {
     channels = {},
-    devices = {}
+    ports = {}
   }
 
   for i=1, IO do
-    m.devices[i] = midi.connect(i)
+    m.ports[i] = midi.connect(i)
+    m.ports[i].event = function(d)
+      local msg = midi.to_msg(d)
+      handle_midi_event(msg.type, i)
+    end
   end
 
   for i=1, CH do
@@ -84,29 +98,19 @@ function init_midi()
   end
 end
 
-function init_devices()
-  devices = {}
+function init_device_configurations()
+  device_configurations = {}
   device_names = {}
 
   local default_device_list = util.scandir('/home/we/dust/code/geppetto/lib/devices/')
 
   for i, v in ipairs(default_device_list) do
-    devices[i] = include('lib/devices/'..v:gsub('.lua', ''))
-    device_names[i] = devices[i].model
+    device_configurations[i] = include('lib/devices/'..v:gsub('.lua', ''))
+    device_names[i] = device_configurations[i].model
   end
 end
 
-function lfo_test(scaled, raw)
-  mod_value = math.ceil(scaled - .5) - 1
-  transmit_control_change(mod_value)
-  redraw()
-end
-
-function calculate_depth(n)
-  return 1 * n / 100
-end
-
-function init_lfo()
+function init_lfo_controls()
   depth_range = {}
   midi_range = {}
   period_options = {1, 2, 4, 8, 16, 32, 64}
@@ -123,19 +127,26 @@ function init_lfo()
   for i=1, MAX do
     midi_range[i] = i
   end
+end
 
-  mod_lfo = LFO:add{
-    shape = 'sine',
-    min = 1,
-    max = 128,
-    depth = 1,
-    mode = 'clocked',
-    period = 4,
-    action = lfo_test,
-    baseline = 'center',
-    reset_target = 'floor',
-    ppqn = 96
-  }
+
+function calculate_depth(n)
+  return n / 100
+end
+
+function safe_set_device_prop(k, v)
+  -- this whole control scheme will have to change as app grows,
+  -- but doing this for initial class migration
+  if active_device then
+    active_device[k] = v
+  end
+end
+
+function safe_set_device_lfo_prop(k, v)
+  -- see note in safe set device prop
+  if active_device then
+    active_device.lfo:set(k, v)
+  end
 end
 
 function enc(e, d)
@@ -145,70 +156,39 @@ function enc(e, d)
   local fields = views[view].fields
 
   if e == 1 then
-    -- time makes fools of us all
+    -- future home of view nav
     app.ui.view = util.clamp(view + d, 1, #views)
-    -- dream big but cut scope
   elseif e == 2 then
-    views[view].active_field = util.clamp(active_field + d, 1, #fields)
+    -- Suspending navigation around inputs until device has been chosen
+    -- rather than resolve some bugs that will be irrelevant when app
+    -- allows multiple devices
+    if active_device then
+      views[view].active_field = util.clamp(active_field + d, 1, #fields)
+    end
   elseif e == 3 then
-    fields[active_field]:set_index_delta(d, false)
+      fields[active_field]:set_index_delta(d, false)
   end
 
   redraw()
 end
 
-function update_device_control_options(v)
+function update_device(v)
   local fields = app.ui.views[1].fields
+  local last_device = active_device and active_device.make..active_device.model or ''
+  local next_device = device_configurations[v].make..device_configurations[v].model
 
-  handle_cancel()
-  create_device_cc_tables(devices[v].control)
-  
-  fields[9]:set('selected', 0)
-  fields[9]:set('options', control_options)
-  fields[10]:set('selected', 0)
-  fields[10]:set('options', devices[v].program)
-end
+  if next_device ~= last_device then
+    if active_device then
+      active_device:rebase(device_configurations[v])
+    else
+      active_device = Device:new(device_configurations[v])
+    end
 
-function create_device_cc_tables(controls)
-  control_options = {}
-  control_channels = {}
-
-  local i = 1
-
-  for ch, name in pairs(controls) do
-    control_options[i] = ch..': '..name
-    control_channels[i] = ch
-    i = i + 1
+    fields[9]:set('selected', 0)
+    fields[9]:set('options', active_device.control_options)
+    fields[10]:set('selected', 0)
+    fields[10]:set('options', active_device.program)
   end
-end
-
-function transmit_program_change()
-  local views = app.ui.views
-  local fields = views[1].fields
-
-  local device = devices[fields[3].selected]
-  local channel = fields[2].selected
-  local connection = fields[1].selected
-  local program = fields[10].selected
-
-  if device.program_zero_indexed then
-    program = program - 1
-  end
-
-  m.devices[connection]:program_change(program, channel)
-end
-
-function transmit_control_change(v)
-  local views = app.ui.views
-  local fields = views[1].fields
-
-  if control_channels then
-    m.devices[fields[1].selected]:cc(control_channels[fields[9].selected], v, fields[2].selected) 
-  end
-end
-
-function transmit_event()
-  -- tk clock, start, stop, continue
 end
 
 function handle_confirm()
@@ -216,16 +196,36 @@ function handle_confirm()
   local views = app.ui.views
   local active_field = views[view].active_field
 
-  if view == 1 and active_field == 10 then
-    transmit_program_change()
-  else
-    mod_lfo:start()
-    app.ui.playing = true
+  if view == 1 and active_field == 10 and active_device then
+    active_device:transmit_program_change()
+  elseif active_device then
+    play()
   end
 end
 
 function handle_cancel()
-  mod_lfo:stop()
+  if active_device then
+    stop()
+  end
+end
+
+function handle_midi_event(event, port)
+  if active_device and active_device.midi_port == port then
+    if event == 'start' then
+      play()
+    elseif event == 'stop' then
+      stop()
+    end
+  end
+end
+
+function play()
+  active_device:start()
+  app.ui.playing = true
+end
+
+function stop()
+  active_device:stop()
   app.ui.playing = false
 end
 
@@ -261,7 +261,7 @@ function paint_mod_value()
   if app.ui.playing then
     screen.level(15)
     screen.move(120, 5)
-    screen.text_right(mod_value or '')
+    screen.text_right(active_device.lfo_modulation_value or '')
   end
 end
 
